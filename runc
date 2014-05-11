@@ -1,0 +1,101 @@
+#!/usr/bin/env python
+import argparse, os, sys, re, inspect, fileinput, textwrap
+# [NOTE001] -- Hack to get multiple argparse.formatter_class  See stackoverflow.com #18462610 for more details
+
+__author__ = "Stephen Meckley"
+__created__ = "05/11/2014"
+
+def main(argv=None):
+  """main function for module"""
+
+  class CustomFormatter(argparse.ArgumentDefaultsHelpFormatter, argparse.RawDescriptionHelpFormatter): pass # See [NOTE001]
+  if argv is None: argv = sys.argv
+  p = argparse.ArgumentParser(prog="runc",
+        formatter_class=CustomFormatter, # See [NOTE001]
+        epilog=textwrap.dedent('''\
+         Additional usage examples:
+         --------------------------
+             runc.py -l 20
+             runc.py -m 'printf("%s %s\\n", "hello", "dude");' -l 20
+             runc.py -d 'int sqr(int i){ return(i*i); }' -m 'printf("sqr(%d)=%d\\n",loop_count, sqr(loop_count));' -l 20
+         '''))
+  p.add_argument("-m", "--main",      default='printf("Hello World! loop #: %d/%d\\n", loop_count, loops);', help="Lines of C-code to compile in the main loop")
+  p.add_argument("-d", "--defs",      default='',         help="Lines of C-code to compile outside the main loop (functions, includes, defines, etc)")
+  p.add_argument("-l", "--loops",     default=1,          help="Repeats --main in the main function. loop_count variable available")
+  p.add_argument("-e", "--exec_name", default='oneliner', help="Name of the executable to create")
+  p.add_argument("-a", "--exec_args", default='',         help="Arguments to pass to the executable")
+  p.add_argument("-c", "--compiler",  default='g++',      help="'g++' or 'gcc -std=c99'")
+  p.add_argument("-g", "--gprof",     default=None,       help="Runs gprof on the executable")
+  p.add_argument("-v", "--verbose",   default=None,       help="More verbose output")
+  p.add_argument("-p", "--path",      default=os.path.expandvars("/tmp/$USER/runc"), help="Loation of generated files and executable")
+  p.add_argument("-f", "--file",      default=None,       help="Provide all the code as a file instaed of just the main loop")
+  args = p.parse_args()
+  argsD = vars(args) # convert opts to simple dict IE: opts.verbose vs optsD[verbose]
+
+  path = args.path
+  cfile = args.exec_name+'.c'
+  compiler = args.compiler+' '
+
+    #include <stdio.h>\n#include <stdlib.h>\n#include <string.h>
+
+  if args.file:
+    for file_lines in fileinput.input(args.file):
+      code += file_lines
+  else:
+    code = """\
+    #include <stdio.h>
+
+    %(args_defs)s
+
+    int main (int argc, char** argv) {
+      int loops=%(args_loops)s;
+      for(int loop_count=0;loop_count<loops;++loop_count) {
+
+        %(args_main)s
+
+      }
+      return (0);
+    }
+    \n""" % { 'args_defs':args.defs, 'args_loops': args.loops, 'args_main':args.main }
+  run("rm -Rf "+path);
+  run("mkdir -p "+path);
+  os.chdir( path );
+  dbg( "cd "+path );
+  with open(cfile,'w') as FILE: FILE.write(code)
+
+  run("cat "+cfile);
+
+  cmd = compiler
+  #cmd .="-S              ";
+  cmd +="-fverbose-asm   "
+  cmd +="-save-temps     "
+  cmd +="-Wformat        "
+  cmd +="-Q              "
+  cmd +="-g              "
+  cmd +="-pg             "
+  cmd +="-Wall           "
+  cmd +=cfile+" -o "+args.exec_name
+  re.sub( '\s+', ' ', cmd ).strip()
+  run(cmd);
+  run(path+'/'+args.exec_name+' '+args.exec_args);
+  if args.gprof:
+    run('gprof '+path+'/'+args.exec_name+' '+args.exec_args);
+
+
+def run(cmd):
+  from subprocess import call
+  fl = inspect.stack()[1][1]
+  ln = inspect.stack()[1][2]
+  print( '[RUN] {fl}:{ln} {cmd}'.format(**vars()))
+  call((cmd.split()))
+
+def dbg(str):
+  fl = inspect.stack()[1][1]
+  ln = inspect.stack()[1][2]
+  print( '[DBG] {fl}:{ln} {str}'.format(**vars()))
+
+if __name__ == "__main__":
+    sys.exit( main(sys.argv) )
+
+
+
